@@ -16,8 +16,10 @@ import {
 } from '@/components/ui/dialog';
 import { api, getErrorMessage } from '@/lib/api';
 import { toast } from 'sonner';
-import { Search, ListTodo, Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Search, ListTodo, Loader2, Plus, Pencil, Trash2, FileSpreadsheet, Upload } from 'lucide-react';
 import type { Task, Department } from '@/types/api';
+import { exportToExcel } from '@/lib/excel';
+import { ExcelImportDialog } from '@/components/common/ExcelImportDialog';
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -29,6 +31,7 @@ export default function TasksPage() {
   // Dialog states
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [deletingTask, setDeletingTask] = useState<Task | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -160,6 +163,65 @@ export default function TasksPage() {
     }
   };
 
+  const handleExportTasks = () => {
+    try {
+      exportToExcel({
+        data: filteredTasks,
+        fileName: 'قائمة_المهام_حلواني',
+        sheetName: 'المهام',
+        columns: [
+          { key: 'code', header: 'كود المهمة' },
+          { key: 'name', header: 'اسم المهمة' },
+          { key: 'department.name', header: 'القسم' },
+          { key: 'expectedTimeMinutes', header: 'الوقت المتوقع (دقائق)' },
+          { key: 'standardQuantity', header: 'الكمية القياسية' },
+          { key: 'unit', header: 'وحدة القياس' },
+          {
+            key: 'isActive',
+            header: 'الحالة',
+            format: (val) => (val ? 'نشطة' : 'معطلة'),
+          },
+        ],
+      });
+      toast.success('تم تصدير ملف الإكسل بنجاح');
+    } catch (err: any) {
+      toast.error(err?.message || 'فشل التصدير');
+    }
+  };
+
+  const handleImportTasks = async (rows: Record<string, any>[]) => {
+    const payload = rows.map((row) => {
+      const deptNameOrCode = String(row['القسم'] || row['اسم القسم'] || row['كود القسم'] || '').trim();
+      const matchedDept = departments.find(
+        (d) =>
+          d.name.trim() === deptNameOrCode ||
+          d.code.trim() === deptNameOrCode ||
+          d.name.includes(deptNameOrCode)
+      );
+
+      const rawTime = row['الوقت المتوقع'] || row['الوقت المتوقع (دقائق)'] || row['الوقت بالدقائق'];
+      const rawQty = row['الكمية القياسية'] || row['الكمية'];
+      const rawActive = row['الحالة'];
+
+      return {
+        code: String(row['كود المهمة'] || row['الكود'] || '').trim(),
+        name: String(row['اسم المهمة'] || row['الاسم'] || '').trim(),
+        departmentId: matchedDept ? matchedDept.id : Number(departments[0]?.id || 1),
+        expectedTimeMinutes: rawTime ? Number(rawTime) : undefined,
+        standardQuantity: rawQty ? Number(rawQty) : undefined,
+        unit: String(row['وحدة القياس'] || row['الوحدة'] || 'قطعة').trim(),
+        isActive: rawActive === 'معطلة' || rawActive === 'inactive' || rawActive === false ? false : true,
+      };
+    });
+
+    const { data } = await api.post('/tasks/bulk', payload);
+    return {
+      success: data.successCount,
+      failed: data.failedCount,
+      errors: data.errors,
+    };
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -167,13 +229,31 @@ export default function TasksPage() {
           <h1 className="text-2xl font-bold">المهام</h1>
           <p className="text-sm text-muted-foreground mt-1">إدارة وتحديد مهام الإنتاج المعيارية لكل قسم</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="text-sm shrink-0">
             {filteredTasks.length} مهمة
           </Badge>
-          <Button onClick={openAddDialog}>
-            <Plus className="ml-2 h-4 w-4" />
-            إضافة مهمة جديدة
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportTasks}
+            className="gap-2 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            تصدير Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsImportOpen(true)}
+            className="gap-2 border-blue-600/30 text-blue-700 hover:bg-blue-50 hover:text-blue-800 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-950/40"
+          >
+            <Upload className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            استيراد Excel
+          </Button>
+          <Button onClick={openAddDialog} size="sm">
+            <Plus className="ml-1 h-4 w-4" />
+            إضافة مهمة
           </Button>
         </div>
       </div>
@@ -412,6 +492,26 @@ export default function TasksPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Excel Import Dialog */}
+      <ExcelImportDialog
+        open={isImportOpen}
+        onOpenChange={setIsImportOpen}
+        title="استيراد المهام من ملف Excel"
+        description="قم برفع ملف Excel لإضافة مجموعة من المهام المعيارية لأقسام الإنتاج"
+        templateFileName="نموذج_استيراد_المهام"
+        templateColumns={[
+          { header: 'كود المهمة', sample: 'TSK-501' },
+          { header: 'اسم المهمة', sample: 'تغليف وتعبئة علب مشكل' },
+          { header: 'القسم', sample: departments[0]?.name || 'عربي - قلي' },
+          { header: 'الوقت المتوقع (دقائق)', sample: 60 },
+          { header: 'الكمية القياسية', sample: 120 },
+          { header: 'وحدة القياس', sample: 'علبة' },
+          { header: 'الحالة', sample: 'نشطة' },
+        ]}
+        onImport={handleImportTasks}
+        onSuccess={loadTasks}
+      />
     </div>
   );
 }

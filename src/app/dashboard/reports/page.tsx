@@ -7,9 +7,10 @@ import { Input } from '@/components/ui/input';
 import { api, getErrorMessage } from '@/lib/api';
 import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
-import { Loader2, BarChart3 } from 'lucide-react';
+import { Loader2, BarChart3, FileSpreadsheet } from 'lucide-react';
 import { formatNumber } from '@/lib/utils';
 import type { DepartmentComparison, WasteAnalysis, MonthlyReport } from '@/types/api';
+import { exportToExcel } from '@/lib/excel';
 
 const WASTE_COLORS = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
 
@@ -76,11 +77,101 @@ export default function ReportsPage() {
     'متوسط التقييم': d.avgGrade,
   })) || [];
 
+  const handleExportDeptComparison = () => {
+    try {
+      exportToExcel({
+        data: deptComparison,
+        fileName: `تقرير_مقارنة_الأقسام_${startDate}_إلى_${endDate}`,
+        sheetName: 'مقارنة الأقسام',
+        columns: [
+          { key: 'department.name', header: 'القسم' },
+          { key: 'department.code', header: 'كود القسم' },
+          { key: 'totalProduced', header: 'إجمالي الإنتاج' },
+          { key: 'totalWaste', header: 'إجمالي الهدر' },
+          {
+            key: 'wastePercentage',
+            header: 'نسبة الهدر %',
+            format: (val) => `${Number(val || 0).toFixed(2)}%`,
+          },
+          { key: 'logCount', header: 'عدد السجلات' },
+          {
+            key: 'avgGrade',
+            header: 'متوسط التقييم (40)',
+            format: (val) => Number(val || 0).toFixed(1),
+          },
+        ],
+      });
+      toast.success('تم تصدير تقرير مقارنة الأقسام بنجاح');
+    } catch (err: any) {
+      toast.error(err?.message || 'فشل التصدير');
+    }
+  };
+
+  const handleExportMonthlyReport = () => {
+    if (!monthlyReport?.dailyBreakdown || monthlyReport.dailyBreakdown.length === 0) {
+      toast.error('لا توجد بيانات شهرية للتصدير');
+      return;
+    }
+    try {
+      exportToExcel({
+        data: monthlyReport.dailyBreakdown,
+        fileName: `التقرير_الشهري_${monthlyReport.period || 'الحالي'}`,
+        sheetName: 'التقرير اليومي للشهر',
+        columns: [
+          { key: 'date', header: 'التاريخ' },
+          { key: 'totalLogs', header: 'عدد السجلات' },
+          { key: 'totalProduced', header: 'إجمالي الإنتاج' },
+          { key: 'totalWaste', header: 'إجمالي الهدر' },
+          {
+            key: 'wastePercentage',
+            header: 'نسبة الهدر %',
+            format: (_, row) => {
+              const total = (row.totalProduced || 0) + (row.totalWaste || 0);
+              return total > 0 ? `${((row.totalWaste / total) * 100).toFixed(2)}%` : '0%';
+            },
+          },
+          {
+            key: 'avgGrade',
+            header: 'متوسط التقييم (40)',
+            format: (val) => Number(val || 0).toFixed(1),
+          },
+        ],
+      });
+      toast.success('تم تصدير التقرير الشهري بنجاح');
+    } catch (err: any) {
+      toast.error(err?.message || 'فشل التصدير');
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">التقارير</h1>
-        <p className="text-sm text-muted-foreground mt-1">تقارير شاملة عن الإنتاج والأداء</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">التقارير</h1>
+          <p className="text-sm text-muted-foreground mt-1">تقارير شاملة عن الإنتاج والأداء</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportDeptComparison}
+            disabled={deptComparison.length === 0}
+            className="gap-2 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            تصدير مقارنة الأقسام
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportMonthlyReport}
+            disabled={!monthlyReport?.dailyBreakdown}
+            className="gap-2 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            تصدير التقرير الشهري
+          </Button>
+        </div>
       </div>
 
       {/* Date Range Filter */}

@@ -16,8 +16,10 @@ import {
 } from '@/components/ui/dialog';
 import { api, getErrorMessage } from '@/lib/api';
 import { toast } from 'sonner';
-import { Search, Wrench, Loader2, Plus, Pencil, Trash2, ArrowLeftRight } from 'lucide-react';
+import { Search, Wrench, Loader2, Plus, Pencil, Trash2, ArrowLeftRight, FileSpreadsheet, Upload } from 'lucide-react';
 import type { Equipment, Department } from '@/types/api';
+import { exportToExcel } from '@/lib/excel';
+import { ExcelImportDialog } from '@/components/common/ExcelImportDialog';
 
 export default function EquipmentPage() {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
@@ -30,6 +32,7 @@ export default function EquipmentPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
   const [transferringEquipment, setTransferringEquipment] = useState<Equipment | null>(null);
   const [deletingEquipment, setDeletingEquipment] = useState<Equipment | null>(null);
@@ -194,6 +197,73 @@ export default function EquipmentPage() {
     }
   };
 
+  const handleExportEquipment = () => {
+    try {
+      exportToExcel({
+        data: filteredEquipment,
+        fileName: 'قائمة_المعدات_حلواني',
+        sheetName: 'المعدات',
+        columns: [
+          { key: 'code', header: 'كود المعدة' },
+          { key: 'name', header: 'اسم المعدة' },
+          { key: 'department.name', header: 'القسم' },
+          { key: 'model', header: 'الموديل' },
+          { key: 'serialNumber', header: 'الرقم التسلسلي' },
+          {
+            key: 'status',
+            header: 'الحالة',
+            format: (val) =>
+              val === 'active' ? 'نشطة' : val === 'maintenance' ? 'تحت الصيانة' : 'خارج الخدمة',
+          },
+        ],
+      });
+      toast.success('تم تصدير ملف الإكسل بنجاح');
+    } catch (err: any) {
+      toast.error(err?.message || 'فشل التصدير');
+    }
+  };
+
+  const handleImportEquipment = async (rows: Record<string, any>[]) => {
+    const payload = rows.map((row) => {
+      const deptNameOrCode = String(row['القسم'] || row['اسم القسم'] || row['كود القسم'] || '').trim();
+      const matchedDept = departments.find(
+        (d) =>
+          d.name.trim() === deptNameOrCode ||
+          d.code.trim() === deptNameOrCode ||
+          d.name.includes(deptNameOrCode)
+      );
+
+      const statusMap: Record<string, string> = {
+        'نشطة': 'active',
+        'نشط': 'active',
+        'active': 'active',
+        'تحت الصيانة': 'maintenance',
+        'صيانة': 'maintenance',
+        'maintenance': 'maintenance',
+        'خارج الخدمة': 'retired',
+        'retired': 'retired',
+      };
+      const rawStatus = String(row['الحالة'] || 'active').trim();
+      const status = statusMap[rawStatus] || 'active';
+
+      return {
+        code: String(row['كود المعدة'] || row['الكود'] || '').trim(),
+        name: String(row['اسم المعدة'] || row['الاسم'] || '').trim(),
+        departmentId: matchedDept ? matchedDept.id : Number(departments[0]?.id || 1),
+        model: String(row['الموديل'] || '').trim() || undefined,
+        serialNumber: String(row['الرقم التسلسلي'] || row['السيريال'] || '').trim() || undefined,
+        status,
+      };
+    });
+
+    const { data } = await api.post('/equipment/bulk', payload);
+    return {
+      success: data.successCount,
+      failed: data.failedCount,
+      errors: data.errors,
+    };
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -201,13 +271,31 @@ export default function EquipmentPage() {
           <h1 className="text-2xl font-bold">المعدات</h1>
           <p className="text-sm text-muted-foreground mt-1">إدارة ومتابعة معدات الإنتاج</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="text-sm shrink-0">
             {filteredEquipment.length} معدة
           </Badge>
-          <Button onClick={openAddDialog}>
-            <Plus className="ml-2 h-4 w-4" />
-            إضافة معدة جديدة
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportEquipment}
+            className="gap-2 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            تصدير Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsImportOpen(true)}
+            className="gap-2 border-blue-600/30 text-blue-700 hover:bg-blue-50 hover:text-blue-800 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-950/40"
+          >
+            <Upload className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            استيراد Excel
+          </Button>
+          <Button onClick={openAddDialog} size="sm">
+            <Plus className="ml-1 h-4 w-4" />
+            إضافة معدة
           </Button>
         </div>
       </div>
@@ -483,6 +571,25 @@ export default function EquipmentPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Excel Import Dialog */}
+      <ExcelImportDialog
+        open={isImportOpen}
+        onOpenChange={setIsImportOpen}
+        title="استيراد المعدات من ملف Excel"
+        description="قم برفع ملف Excel لإضافة مجموعة من معدات الإنتاج دفعة واحدة"
+        templateFileName="نموذج_استيراد_المعدات"
+        templateColumns={[
+          { header: 'كود المعدة', sample: 'EQ-801' },
+          { header: 'اسم المعدة', sample: 'خلاط شوكولاتة سريع' },
+          { header: 'القسم', sample: departments[0]?.name || 'عربي - قلي' },
+          { header: 'الموديل', sample: 'ChocoMix-2026' },
+          { header: 'الرقم التسلسلي', sample: 'SN-998822' },
+          { header: 'الحالة', sample: 'نشطة' },
+        ]}
+        onImport={handleImportEquipment}
+        onSuccess={loadEquipment}
+      />
     </div>
   );
 }

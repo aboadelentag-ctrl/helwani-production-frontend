@@ -16,8 +16,10 @@ import {
 } from '@/components/ui/dialog';
 import { api, getErrorMessage } from '@/lib/api';
 import { toast } from 'sonner';
-import { Search, Users, Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Search, Users, Loader2, Plus, Pencil, Trash2, FileSpreadsheet, Upload } from 'lucide-react';
 import type { Worker, Department } from '@/types/api';
+import { exportToExcel } from '@/lib/excel';
+import { ExcelImportDialog } from '@/components/common/ExcelImportDialog';
 
 export default function WorkersPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -28,6 +30,7 @@ export default function WorkersPage() {
   // Dialog states
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
   const [deletingWorker, setDeletingWorker] = useState<Worker | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -151,6 +154,78 @@ export default function WorkersPage() {
     }
   };
 
+  const handleExportWorkers = () => {
+    try {
+      exportToExcel({
+        data: workers,
+        fileName: 'قائمة_العمال_حلواني',
+        sheetName: 'العمال',
+        columns: [
+          { key: 'code', header: 'كود العامل' },
+          { key: 'name', header: 'اسم العامل' },
+          { key: 'department.name', header: 'القسم' },
+          { key: 'jobTitle', header: 'المسمى الوظيفي' },
+          { key: 'phone', header: 'رقم الهاتف' },
+          {
+            key: 'hireDate',
+            header: 'تاريخ التعيين',
+            format: (val) => (val ? new Date(val).toISOString().split('T')[0] : ''),
+          },
+          {
+            key: 'status',
+            header: 'الحالة',
+            format: (val) =>
+              val === 'active' ? 'نشط' : val === 'vacation' ? 'إجازة' : 'غير نشط',
+          },
+        ],
+      });
+      toast.success('تم تصدير ملف الإكسل بنجاح');
+    } catch (err: any) {
+      toast.error(err?.message || 'فشل التصدير');
+    }
+  };
+
+  const handleImportWorkers = async (rows: Record<string, any>[]) => {
+    const payload = rows.map((row) => {
+      const deptNameOrCode = String(row['القسم'] || row['اسم القسم'] || row['كود القسم'] || '').trim();
+      const matchedDept = departments.find(
+        (d) =>
+          d.name.trim() === deptNameOrCode ||
+          d.code.trim() === deptNameOrCode ||
+          d.name.includes(deptNameOrCode)
+      );
+
+      const statusMap: Record<string, string> = {
+        'نشط': 'active',
+        'active': 'active',
+        'غير نشط': 'inactive',
+        'inactive': 'inactive',
+        'إجازة': 'vacation',
+        'اجازة': 'vacation',
+        'vacation': 'vacation',
+      };
+      const rawStatus = String(row['الحالة'] || 'active').trim();
+      const status = statusMap[rawStatus] || 'active';
+
+      return {
+        code: String(row['كود العامل'] || row['الكود'] || '').trim(),
+        name: String(row['اسم العامل'] || row['الاسم'] || '').trim(),
+        departmentId: matchedDept ? matchedDept.id : Number(departments[0]?.id || 1),
+        jobTitle: String(row['المسمى الوظيفي'] || row['الوظيفة'] || '').trim() || undefined,
+        phone: String(row['رقم الهاتف'] || row['الهاتف'] || '').trim() || undefined,
+        hireDate: row['تاريخ التعيين'] ? new Date(row['تاريخ التعيين']).toISOString() : undefined,
+        status,
+      };
+    });
+
+    const { data } = await api.post('/workers/bulk', payload);
+    return {
+      success: data.successCount,
+      failed: data.failedCount,
+      errors: data.errors,
+    };
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -158,13 +233,31 @@ export default function WorkersPage() {
           <h1 className="text-2xl font-bold">العمال</h1>
           <p className="text-sm text-muted-foreground mt-1">إدارة وتتبع عمال الإنتاج</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary" className="text-sm shrink-0">
             {workers.length} عامل
           </Badge>
-          <Button onClick={openAddDialog}>
-            <Plus className="ml-2 h-4 w-4" />
-            إضافة عامل جديد
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportWorkers}
+            className="gap-2 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            تصدير Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsImportOpen(true)}
+            className="gap-2 border-blue-600/30 text-blue-700 hover:bg-blue-50 hover:text-blue-800 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-950/40"
+          >
+            <Upload className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            استيراد Excel
+          </Button>
+          <Button onClick={openAddDialog} size="sm">
+            <Plus className="ml-1 h-4 w-4" />
+            إضافة عامل
           </Button>
         </div>
       </div>
@@ -387,6 +480,26 @@ export default function WorkersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Excel Import Dialog */}
+      <ExcelImportDialog
+        open={isImportOpen}
+        onOpenChange={setIsImportOpen}
+        title="استيراد العمال من ملف Excel"
+        description="قم برفع ملف Excel لإضافة مجموعة من العمال الجدد لقاعدة البيانات دفعة واحدة"
+        templateFileName="نموذج_استيراد_العمال"
+        templateColumns={[
+          { header: 'كود العامل', sample: 'W-901' },
+          { header: 'اسم العامل', sample: 'محمود عبد الرحيم' },
+          { header: 'القسم', sample: departments[0]?.name || 'عربي - قلي' },
+          { header: 'المسمى الوظيفي', sample: 'شيف قلي' },
+          { header: 'رقم الهاتف', sample: '01012345678' },
+          { header: 'تاريخ التعيين', sample: '2026-01-15' },
+          { header: 'الحالة', sample: 'نشط' },
+        ]}
+        onImport={handleImportWorkers}
+        onSuccess={loadWorkers}
+      />
     </div>
   );
 }
